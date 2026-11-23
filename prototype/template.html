@@ -1,0 +1,665 @@
+<!doctype html>
+<!--
+  PROTOTYPE, throw away. Question: "How does an interactive architecture viewer
+  for a Rails app look and feel?" Three variants of one viewer, switchable via
+  ?variant=A|B|C and the bottom bar. Data: a real Prism scan of Campfire's (basecamp/once-campfire, MIT)
+  app/ folder plus git churn. Coverage and mutation are not scanned.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>arch-viewer prototype</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c1f25; --panel2: #23272f; --line: #343a45;
+    --text: #e6e8eb; --muted: #8b93a1; --accent: #6aa9ff; --in: #c18cff;
+    --red: #ff5a5a; --edge: #6b7383; --good: #3ccf7a; --warn: #f2c14e;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; gap: 16px; align-items: center; padding: 8px 14px;
+    border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  header .tag { color: var(--muted); font-size: 12px; }
+  header label { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+  select, button { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 4px 8px; font: inherit; cursor: pointer; }
+  .banner { padding: 4px 14px; background: #3a2a12; color: var(--warn); font-size: 12px;
+    border-bottom: 1px solid #5a4218; display: none; letter-spacing: .04em; }
+  .banner.on { display: block; }
+  main { display: grid; grid-template-columns: 1fr 420px; height: calc(100% - 46px); }
+  main.with-banner { height: calc(100% - 72px); }
+  #stage { position: relative; overflow: auto; }
+  #card { border-left: 1px solid var(--line); background: var(--panel); overflow: auto; }
+  .empty { color: var(--muted); padding: 24px; }
+  .legend { position: absolute; left: 12px; bottom: 64px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 11px; color: var(--muted); }
+  .legend span.sw { display: inline-block; width: 22px; height: 3px; vertical-align: middle; margin-right: 6px; }
+  .tip { position: fixed; pointer-events: none; background: #0d0f12; border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 8px; font: 11px/1.5 ui-monospace, monospace; z-index: 50;
+    max-width: 460px; display: none; white-space: pre; }
+  .tip .v { color: var(--red); }
+  svg text { fill: var(--text); font: 12px ui-sans-serif, system-ui, sans-serif; }
+  .crumb { position: sticky; top: 0; left: 0; z-index: 5; padding: 8px 12px; color: var(--muted);
+    background: linear-gradient(var(--bg), transparent); }
+  .crumb a { color: var(--accent); cursor: pointer; text-decoration: none; }
+
+  /* class card */
+  .cc-head { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .cc-head h2 { margin: 0 0 2px; font-size: 16px; font-family: ui-monospace, monospace; }
+  .cc-head .file { color: var(--accent); cursor: pointer; font-size: 12px; }
+  .cc-head .sup { color: var(--muted); font-size: 12px; }
+  .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 10px 14px; }
+  .metric { background: var(--panel2); border-radius: 6px; padding: 6px 8px; }
+  .metric b { display: block; font-size: 15px; }
+  .metric small { color: var(--muted); }
+  .metric.nodata b { color: var(--muted); font-weight: 400; font-size: 12px; }
+  .sect { padding: 6px 14px 10px; }
+  .sect h3 { font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: .06em; margin: 6px 0; }
+  .row { display: flex; justify-content: space-between; gap: 8px; padding: 2px 6px; border-radius: 4px;
+    font-family: ui-monospace, monospace; font-size: 12px; cursor: pointer; }
+  .row:hover { background: var(--panel2); }
+  .row .cc { color: var(--muted); flex: none; }
+  .row > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row.v { color: var(--red); }
+  .row .vis { color: var(--muted); width: 10px; }
+  pre.src { margin: 0; padding: 8px 0; background: #0f1115; font: 12px/1.5 ui-monospace, monospace;
+    max-height: 420px; overflow: auto; border-top: 1px solid var(--line); }
+  pre.src div { padding: 0 10px; white-space: pre; }
+  pre.src div.hl { background: #23324a; }
+  pre.src i { color: #555d6b; font-style: normal; display: inline-block; width: 34px; user-select: none; }
+
+  /* variant B */
+  .bands { padding: 14px 14px 90px; position: relative; }
+  .band { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 26px; padding: 8px 10px 12px;
+    background: rgba(255,255,255,.015); position: relative; }
+  .band h4 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .band h4 em { font-style: normal; color: #5d6574; margin-left: 8px; text-transform: none; letter-spacing: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { border-radius: 6px; padding: 4px 8px; font: 12px ui-monospace, monospace; cursor: pointer;
+    border: 1px solid transparent; color: #0d0f12; position: relative; z-index: 2; }
+  .chip small { opacity: .65; margin-left: 6px; }
+  .chip.dim { opacity: .25; }
+  .chip.sel { outline: 2px solid #fff; }
+  svg.overlay { position: absolute; inset: 0; pointer-events: none; z-index: 1; overflow: visible; }
+
+  /* variant C */
+  .matrix { padding: 14px 14px 90px; }
+  table.dsm { border-collapse: collapse; font: 11px ui-monospace, monospace; }
+  table.dsm th, table.dsm td { border: 1px solid var(--line); }
+  table.dsm th.rowh { text-align: left; padding: 3px 8px; white-space: nowrap; cursor: pointer; font-weight: 400; }
+  table.dsm th.rowh.grp { font-weight: 600; background: var(--panel2); }
+  table.dsm th.rowh.cls { padding-left: 22px; color: var(--muted); }
+  table.dsm th.colh { height: 150px; vertical-align: bottom; padding: 4px 0; width: 24px; }
+  table.dsm th.colh div { writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; font-weight: 400; color: var(--muted); }
+  table.dsm th.colh.grp div { color: var(--text); font-weight: 600; }
+  table.dsm td { width: 24px; height: 22px; text-align: center; cursor: pointer; }
+  table.dsm td.diag { background: #2a2f38; }
+  table.dsm td.n { background: #2b3b52; }
+  table.dsm td.v { background: #5a1f24; color: #ffb3b3; }
+  table.dsm td.on { outline: 2px solid #fff; }
+  .pairs { margin-top: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 12px; font: 12px ui-monospace, monospace; max-width: 720px; }
+  .pairs .v { color: var(--red); }
+  .hint { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+
+  /* switcher (not part of the design) */
+  .switcher { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 100;
+    display: flex; align-items: center; gap: 10px; background: #fff; color: #111; border-radius: 999px;
+    padding: 6px 8px; box-shadow: 0 6px 24px rgba(0,0,0,.5); font-weight: 600; }
+  .switcher button { background: #111; color: #fff; border: 0; border-radius: 999px; width: 30px; height: 30px; }
+  .switcher span { min-width: 230px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>arch-viewer</h1>
+  <span class="tag" id="apptag"></span>
+  <label>Diagram <select id="diagram"></select></label>
+  <label>Colour by <select id="colour">
+    <option value="cc">Complexity (max per method)</option>
+    <option value="churn">Churn (git commits)</option>
+    <option value="hotspot">Hotspot (complexity × churn)</option>
+  </select></label>
+  <button id="regen" title="In the gem this would mail the agent">Regen ↻</button>
+  <span class="tag" id="status"></span>
+</header>
+<div class="banner" id="banner">PROPOSAL, NOT IN THE CODE. Classes are grouped and ranked by the proposal. Red arrows are worked out again for it.</div>
+<main id="main">
+  <section id="stage"></section>
+  <aside id="card"><div class="empty">Click a class to open its card.<br><br>Click a method on the card to go to it in the source.</div></aside>
+</main>
+<div class="tip" id="tip"></div>
+<div class="switcher" id="switcher">
+  <button id="prev" aria-label="Previous variant">←</button>
+  <span id="vlabel"></span>
+  <button id="next" aria-label="Next variant">→</button>
+</div>
+
+<script>
+const IR = /*IR*/null;
+
+// ---------- model ----------
+const classes = IR.classes;
+const byId = Object.fromEntries(classes.map(c => [c.id, c]));
+// Ruby looks up a bare constant in the lexical scope first: inside User,
+// "Avatar" means User::Avatar when that exists.
+function resolve(name, fromId) {
+  if (!name) return null;
+  const parts = fromId.split("::");
+  for (let i = parts.length; i >= 0; i--) {
+    const cand = [...parts.slice(0, i), name].join("::");
+    if (byId[cand]) return cand;
+  }
+  return null;
+}
+const STRENGTH = { inheritance: 4, includes: 3, association: 2, dependency: 1 };
+
+const edgeMap = new Map();
+function addEdge(from, to, kind, why) {
+  if (!byId[to] || from === to) return;
+  const k = from + "→" + to;
+  const e = edgeMap.get(k);
+  if (!e) edgeMap.set(k, { from, to, kind, why: [why] });
+  else { if (STRENGTH[kind] > STRENGTH[e.kind]) e.kind = kind; e.why.push(why); }
+}
+for (const c of classes) {
+  const sup = resolve(c.superclass, c.id.split("::").slice(0, -1).join("::") || "");
+  if (sup) addEdge(c.id, sup, "inheritance", "< " + c.superclass);
+  for (const a of c.associations) {
+    const t = resolve(a.target, c.id);
+    if (t) addEdge(c.id, t, "association", `${a.macro} :${a.name}`);
+  }
+  for (const r of Object.keys(c.refs)) {
+    const t = resolve(r, c.id);
+    if (!t || t === sup) continue;
+    const inc = byId[t].kind === "module" && new RegExp("include\\s+" + r + "\\b").test(c.source);
+    addEdge(c.id, t, inc ? "includes" : "dependency", inc ? "include " + r : "uses " + r);
+  }
+}
+const edges = [...edgeMap.values()];
+
+// ---------- diagrams (real + proposals) ----------
+const REAL_LEVELS = [ // inner (rank 0) first
+  ["models", "models/concerns"],
+  ["forms", "policies", "notifications"],
+  ["mailers", "jobs"],
+  ["controllers", "controllers/concerns", "components", "helpers", "channels"],
+];
+const DIAGRAMS = {
+  real: { label: "Real: Rails folders", groupOf: c => c.folder,
+          rankOf: g => REAL_LEVELS.findIndex(l => l.includes(g)) },
+};
+// A layer takes classes by name or namespace ("Room" takes Room and Room::*),
+// and whole folders.
+function proposal(label, layers) {
+  const rank = {};
+  layers.forEach((l, i) => rank[l.id] = i);
+  const groupOf = c => {
+    for (const l of layers) if ((l.classes || []).some(n => c.id === n || c.id.startsWith(n + "::"))) return l.id;
+    for (const l of layers) if ((l.folders || []).includes(c.folder)) return l.id;
+    return "unassigned";
+  };
+  return { label, proposal: true, groupOf, rankOf: g => g in rank ? rank[g] : -1 };
+}
+// Proposals for Campfire (basecamp/once-campfire).
+const identity = { id: "identity", classes: ["ApplicationRecord", "ApplicationPlatform", "Current", "Account", "User", "Session", "Ban", "FirstRun", "Purchaser"] };
+const rooms = { id: "rooms", classes: ["Room", "Rooms", "Membership"] };
+const messaging = { id: "messaging", classes: ["Message", "Boost", "Search", "Opengraph", "Sound"] };
+const rest = [
+  { id: "caching", classes: ["FragmentCache", "RecordCache", "ResponseCache"] },
+  { id: "delivery", classes: ["Push", "Webhook"], folders: ["jobs", "channels", "mailers"] },
+  { id: "web", folders: ["controllers", "controllers/concerns", "helpers", "components"] },
+];
+DIAGRAMS.roomsInner = proposal("Proposal: contexts, rooms inner", [identity, rooms, messaging, ...rest]);
+DIAGRAMS.messagesInner = proposal("Proposal: contexts, messages inner", [identity, messaging, rooms, ...rest]);
+
+let D; // current diagram
+function groups() {
+  const gs = {};
+  for (const c of classes) (gs[D.groupOf(c)] ||= []).push(c);
+  return Object.entries(gs).map(([id, cs]) => ({ id, classes: cs, rank: D.rankOf(id) }))
+    .sort((a, b) => a.rank - b.rank || a.id.localeCompare(b.id));
+}
+function rankOfClass(id) { return D.rankOf(D.groupOf(byId[id])); }
+// Dependency rule: an inner (lower rank) class must not depend on an outer one.
+function violating(e) {
+  const rf = rankOfClass(e.from), rt = rankOfClass(e.to);
+  return rf >= 0 && rt >= 0 && rf < rt;
+}
+
+// ---------- metrics & colour ----------
+const metric = {
+  cc: c => Math.max(0, ...c.methods.map(m => m.cc)),
+  churn: c => c.churn,
+  hotspot: c => c.methods.reduce((s, m) => s + m.cc, 0) * c.churn,
+};
+let colourBy = "cc";
+function grade(c) { // 0 good .. 1 bad, by rank among all classes
+  const vals = classes.map(metric[colourBy]).sort((a, b) => a - b);
+  // percentile, so one outlier does not paint everything else green
+  const v = metric[colourBy](c);
+  if (!v) return 0;
+  return vals.filter(x => x < v).length / (vals.length - 1);
+}
+function colour(t) { // green → yellow → red
+  const h = 130 - 130 * t;
+  return `hsl(${h} 60% ${58 - t * 6}%)`;
+}
+function groupGrade(g) { return Math.max(...g.classes.map(grade)); }
+
+// ---------- shared UI ----------
+const stage = document.getElementById("stage");
+const card = document.getElementById("card");
+const tip = document.getElementById("tip");
+let selected = null;
+
+function showTip(evt, lines) {
+  tip.innerHTML = lines.join("\n");
+  tip.style.display = "block";
+  tip.style.left = Math.min(evt.clientX + 14, innerWidth - 480) + "px";
+  tip.style.top = (evt.clientY + 14) + "px";
+}
+function hideTip() { tip.style.display = "none"; }
+function pairLine(e) {
+  const t = `${e.from} → ${e.to}  (${e.kind}: ${e.why[0]})`;
+  return violating(e) ? `<span class="v">✗ ${esc(t)}</span>` : esc(t);
+}
+function esc(s) { return String(s).replace(/[&<>]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch])); }
+
+function openCard(id, line) {
+  selected = id;
+  const c = byId[id];
+  const out = edges.filter(e => e.from === id), inc = edges.filter(e => e.to === id);
+  const m = (label, val, nodata) => `<div class="metric ${nodata ? "nodata" : ""}"><b>${val}</b><small>${label}</small></div>`;
+  card.innerHTML = `
+    <div class="cc-head">
+      <h2>${esc(c.id)}</h2>
+      <div class="sup">${c.kind}${c.superclass ? " &lt; " + esc(c.superclass) : ""} · group <b>${esc(D.groupOf(c))}</b> · level ${rankOfClass(id)}</div>
+      <div class="file" data-line="1">${esc(c.file)}</div>
+    </div>
+    <div class="metrics">
+      ${m("lines", c.loc)}${m("max complexity", metric.cc(c))}${m("churn (commits)", c.churn)}
+      ${m("coverage", "no data — SimpleCov", true)}${m("mutation", "no data — Mutant", true)}${m("hotspot", metric.hotspot(c))}
+    </div>
+    <div class="sect"><h3>Methods and scopes</h3>
+      ${c.methods.map(mm => `<div class="row" data-line="${mm.line}"><span><span class="vis">${mm.visibility === "public" ? "+" : "-"}</span> ${esc(mm.name)}</span><span class="cc">cc ${mm.cc}</span></div>`).join("") || '<div class="empty" style="padding:4px 6px">none</div>'}
+    </div>
+    <div class="sect"><h3>Depends on (${out.length})</h3>
+      ${out.map(e => `<div class="row ${violating(e) ? "v" : ""}" data-go="${esc(e.to)}"><span>${violating(e) ? "✗ " : ""}${esc(e.to)}</span><span class="cc">${e.kind}</span></div>`).join("")}
+    </div>
+    <div class="sect"><h3>Used by (${inc.length})</h3>
+      ${inc.map(e => `<div class="row ${violating(e) ? "v" : ""}" data-go="${esc(e.from)}"><span>${violating(e) ? "✗ " : ""}${esc(e.from)}</span><span class="cc">${e.kind}</span></div>`).join("")}
+    </div>
+    <pre class="src">${c.source.split("\n").map((l, i) => `<div data-n="${i + 1}"><i>${i + 1}</i>${esc(l)}</div>`).join("")}</pre>`;
+  card.querySelectorAll("[data-line]").forEach(el => el.onclick = () => jump(+el.dataset.line));
+  card.querySelectorAll("[data-go]").forEach(el => el.onclick = () => { openCard(el.dataset.go); render(); });
+  if (line) jump(line);
+  status();
+}
+function jump(line) {
+  const c = byId[selected];
+  const m = c.methods.find(mm => mm.line === line);
+  const end = m ? m.end_line : line;
+  card.querySelectorAll("pre.src div").forEach(d => d.classList.toggle("hl", +d.dataset.n >= line && +d.dataset.n <= end && line > 1));
+  const target = card.querySelector(`pre.src div[data-n="${line}"]`);
+  const pre = card.querySelector("pre.src");
+  if (target) pre.scrollTop = target.offsetTop - pre.offsetTop - 40;
+}
+function status() {
+  const v = edges.filter(violating).length;
+  document.getElementById("status").innerHTML =
+    `${classes.length} classes · ${edges.length} edges · <span style="color:${v ? "var(--red)" : "var(--good)"}">${v} dependency-rule violations</span>`;
+}
+function legend() {
+  return `<div class="legend">
+    <div><span class="sw" style="background:var(--edge)"></span>dependency (outer → inner)</div>
+    <div><span class="sw" style="background:var(--red)"></span>violation (inner → outer)</div>
+    <div style="margin-top:4px">box colour: <span style="color:${colour(0)}">■ low</span> <span style="color:${colour(.5)}">■</span> <span style="color:${colour(1)}">■ high</span> ${colourBy}</div>
+  </div>`;
+}
+
+// curve from box a to box b (each {x,y,w,h}), as uml-viewer does: ports on facing sides
+function curve(a, b, off = 0) {
+  const ax = a.x + a.w / 2 + off, bx = b.x + b.w / 2 + off;
+  if (Math.abs(a.y - b.y) < 4) { // same row: arc over the top
+    const y = a.y, lift = 40 + Math.abs(ax - bx) * 0.15;
+    return { d: `M${ax},${y} C${ax},${y - lift} ${bx},${y - lift} ${bx},${y}`, mx: (ax + bx) / 2, my: y - lift * 0.75 };
+  }
+  const down = a.y < b.y;
+  const y1 = down ? a.y + a.h : a.y, y2 = down ? b.y : b.y + b.h;
+  const dy = (y2 - y1) / 2;
+  return { d: `M${ax},${y1} C${ax},${y1 + dy} ${bx},${y2 - dy} ${bx},${y2}`, mx: (ax + bx) / 2, my: (y1 + y2) / 2 };
+}
+function svgEl(tag, attrs, parent) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(el);
+  return el;
+}
+function markers(svg) {
+  const defs = svgEl("defs", {}, svg);
+  for (const [id, col] of [["ok", "#6b7383"], ["bad", "#ff5a5a"], ["hot", "#6aa9ff"], ["inc", "#c18cff"]]) {
+    const m = svgEl("marker", { id: "m-" + id, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, defs);
+    svgEl("path", { d: "M0,0 L10,5 L0,10 z", fill: col }, m);
+  }
+}
+
+// ---------- Variant A: drill-down boxes (uml-viewer style) ----------
+let drill = new URLSearchParams(location.search).get("drill"); // group id or null
+function VariantA() {
+  const gs = groups();
+  if (drill && !gs.find(g => g.id === drill)) drill = null;
+  const W = Math.max(stage.clientWidth - 20, 700);
+  stage.innerHTML = `<div class="crumb">${drill ? `<a id="up">← all components</a> / <b>${esc(drill)}</b> &nbsp;<span>(Esc goes up)</span>` : "All components. Double-click a box to open it. Hover an arrow to see what it bundles."}</div>`;
+  const svg = svgEl("svg", { width: W }, stage);
+  markers(svg);
+  const boxes = {};
+  let H;
+
+  if (!drill) {
+    // components in rows by rank; inner (rank 0) at the bottom
+    const ranks = [...new Set(gs.map(g => g.rank))].sort((a, b) => b - a);
+    let y = 90;
+    for (const r of ranks) {
+      const row = gs.filter(g => g.rank === r);
+      const bw = Math.min(230, (W - 40) / row.length - 30);
+      let maxH = 0;
+      row.forEach((g, i) => {
+        const shown = Math.min(g.classes.length, 7);
+        const h = 34 + shown * 16 + (g.classes.length > 7 ? 16 : 0);
+        const x = 20 + i * ((W - 40) / row.length) + ((W - 40) / row.length - bw) / 2;
+        boxes[g.id] = { x, y, w: bw, h, g };
+        maxH = Math.max(maxH, h);
+      });
+      y += maxH + 90;
+    }
+    H = y;
+    // bundled arrows between groups
+    const bundles = {};
+    for (const e of edges) {
+      const gf = D.groupOf(byId[e.from]), gt = D.groupOf(byId[e.to]);
+      if (gf === gt) continue;
+      (bundles[gf + "|" + gt] ||= []).push(e);
+    }
+    for (const [k, es] of Object.entries(bundles)) {
+      const [gf, gt] = k.split("|");
+      const bad = es.some(violating);
+      const off = bundles[gt + "|" + gf] ? (gf < gt ? -10 : 10) : 0; // two-way: side by side
+      const cv = curve(boxes[gf], boxes[gt], off);
+      const p = svgEl("path", { d: cv.d, fill: "none", stroke: bad ? "#ff5a5a" : "#6b7383",
+        "stroke-width": Math.min(1 + es.length * 0.5, 5), "marker-end": `url(#m-${bad ? "bad" : "ok"})`, opacity: .85 }, svg);
+      const hit = svgEl("path", { d: cv.d, fill: "none", stroke: "transparent", "stroke-width": 14, style: "cursor:help" }, svg);
+      hit.onmousemove = ev => { p.setAttribute("opacity", 1); showTip(ev, [`<b>${gf} → ${gt}</b>  ${es.length} pair(s)`, ...es.map(pairLine)]); };
+      hit.onmouseleave = () => { p.setAttribute("opacity", .85); hideTip(); };
+    }
+    for (const b of Object.values(boxes)) {
+      const g = svgEl("g", { style: "cursor:pointer" }, svg);
+      svgEl("rect", { x: b.x, y: b.y, width: b.w, height: b.h, rx: 8, fill: "#1c1f25", stroke: colour(groupGrade(b.g)), "stroke-width": 2 }, g);
+      svgEl("rect", { x: b.x, y: b.y, width: b.w, height: 26, rx: 8, fill: colour(groupGrade(b.g)) }, g);
+      const t = svgEl("text", { x: b.x + 10, y: b.y + 17, style: "fill:#0d0f12;font-weight:600;font-style:italic" }, g);
+      t.textContent = b.g.id;
+      const n = svgEl("text", { x: b.x + b.w - 10, y: b.y + 17, "text-anchor": "end", style: "fill:#0d0f12;font-size:11px" }, g);
+      n.textContent = `L${b.g.rank} · ${b.g.classes.length}`;
+      b.g.classes.slice(0, 7).forEach((c, i) => {
+        const ct = svgEl("text", { x: b.x + 12, y: b.y + 44 + i * 16, style: "font-family:ui-monospace,monospace;font-size:11px;fill:#c9ced6" }, g);
+        ct.textContent = c.id.replace(/::Component$/, "");
+      });
+      if (b.g.classes.length > 7) {
+        const more = svgEl("text", { x: b.x + 12, y: b.y + 44 + 7 * 16, style: "font-size:11px;fill:#8b93a1" }, g);
+        more.textContent = `+ ${b.g.classes.length - 7} more`;
+      }
+      g.ondblclick = () => { drill = b.g.id; render(); };
+    }
+  } else {
+    // inside one component: its classes as UML boxes; neighbour components as pills
+    const g = gs.find(x => x.id === drill);
+    const inside = new Set(g.classes.map(c => c.id));
+    const related = edges.filter(e => inside.has(e.from) !== inside.has(e.to));
+    const neighbour = id => D.groupOf(byId[id]);
+    const outer = new Set(), inner = new Set();
+    for (const e of related) {
+      const other = inside.has(e.from) ? e.to : e.from;
+      const ng = neighbour(other);
+      (D.rankOf(ng) > g.rank ? outer : inner).add(ng);
+    }
+    const pillRow = (set, y) => [...set].forEach((ng, i, arr) => {
+      const w = 150, gap = (W - 40) / arr.length;
+      boxes["@" + ng] = { x: 20 + i * gap + (gap - w) / 2, y, w, h: 28, pill: ng };
+    });
+    pillRow(outer, 70);
+    const cols = Math.max(1, Math.min(4, Math.floor((W - 40) / 250)));
+    const cw = (W - 40) / cols;
+    let y0 = outer.size ? 170 : 60, rowH = 0, maxY = y0;
+    // order: base classes first so inheritance points up the page
+    const ordered = [...g.classes].sort((a, b) => (edges.some(e => e.from === b.id && e.to === a.id && e.kind === "inheritance") ? -1 : 0) || a.id.localeCompare(b.id));
+    ordered.forEach((c, i) => {
+      const col = i % cols;
+      if (col === 0 && i) { y0 += rowH + 60; rowH = 0; }
+      const shown = c.methods.slice(0, 6);
+      const h = 30 + shown.length * 15 + (c.methods.length > 6 ? 15 : 0) + 8;
+      boxes[c.id] = { x: 20 + col * cw + 20, y: y0, w: cw - 40, h, c, shown };
+      rowH = Math.max(rowH, h); maxY = y0 + h;
+    });
+    pillRow(inner, maxY + 90);
+    H = maxY + (inner.size ? 160 : 60);
+    const place = id => inside.has(id) ? boxes[id] : boxes["@" + neighbour(id)];
+    // edges: inside↔inside one by one; inside↔outside bundled per neighbour
+    const drawn = {};
+    for (const e of edges) {
+      const fi = inside.has(e.from), ti = inside.has(e.to);
+      if (!fi && !ti) continue;
+      const key = (fi ? e.from : "@" + neighbour(e.from)) + "|" + (ti ? e.to : "@" + neighbour(e.to));
+      (drawn[key] ||= []).push(e);
+    }
+    for (const [k, es] of Object.entries(drawn)) {
+      const [a, b] = k.split("|");
+      const A = boxes[a] || place(a), B = boxes[b] || place(b);
+      if (!A || !B || A === B) continue;
+      const bad = es.some(violating);
+      const hot = selected && es.some(e => e.from === selected || e.to === selected);
+      const cv = curve(A, B, drawn[b + "|" + a] ? (a < b ? -8 : 8) : 0);
+      const dash = es.every(e => e.kind === "association") ? "6 4" : null;
+      const p = svgEl("path", { d: cv.d, fill: "none", stroke: bad ? "#ff5a5a" : hot ? "#6aa9ff" : "#6b7383",
+        "stroke-width": hot || bad ? 2 : 1.3, "marker-end": `url(#m-${bad ? "bad" : hot ? "hot" : "ok"})` }, svg);
+      if (dash) p.setAttribute("stroke-dasharray", dash);
+      const hit = svgEl("path", { d: cv.d, fill: "none", stroke: "transparent", "stroke-width": 12, style: "cursor:help" }, svg);
+      hit.onmousemove = ev => showTip(ev, es.map(pairLine));
+      hit.onmouseleave = hideTip;
+    }
+    for (const b of Object.values(boxes)) {
+      const gEl = svgEl("g", { style: "cursor:pointer" }, svg);
+      if (b.pill) {
+        svgEl("rect", { x: b.x, y: b.y, width: b.w, height: b.h, rx: 14, fill: "#23272f", stroke: "#4a5160", "stroke-dasharray": "3 3" }, gEl);
+        const t = svgEl("text", { x: b.x + b.w / 2, y: b.y + 18, "text-anchor": "middle", style: "font-style:italic;fill:#8b93a1" }, gEl);
+        t.textContent = b.pill + " ↗";
+        gEl.ondblclick = () => { drill = b.pill; render(); };
+        continue;
+      }
+      const col = colour(grade(b.c));
+      svgEl("rect", { x: b.x, y: b.y, width: b.w, height: b.h, rx: 4, fill: "#1c1f25", stroke: selected === b.c.id ? "#fff" : col, "stroke-width": selected === b.c.id ? 2.5 : 1.5 }, gEl);
+      svgEl("rect", { x: b.x, y: b.y, width: b.w, height: 24, rx: 4, fill: col }, gEl);
+      const t = svgEl("text", { x: b.x + b.w / 2, y: b.y + 16, "text-anchor": "middle", style: `fill:#0d0f12;font-weight:600;${b.c.kind === "module" ? "font-style:italic" : ""}` }, gEl);
+      t.textContent = (b.c.kind === "module" ? "«module» " : "") + b.c.id.replace(/::Component$/, "");
+      svgEl("line", { x1: b.x, x2: b.x + b.w, y1: b.y + 24, y2: b.y + 24, stroke: col }, gEl);
+      b.shown.forEach((mm, i) => {
+        const mt = svgEl("text", { x: b.x + 8, y: b.y + 40 + i * 15, style: "font-family:ui-monospace,monospace;font-size:11px;fill:#c9ced6" }, gEl);
+        mt.textContent = (mm.visibility === "public" ? "+ " : "- ") + mm.name;
+      });
+      if (b.c.methods.length > 6) {
+        const more = svgEl("text", { x: b.x + 8, y: b.y + 40 + 6 * 15, style: "font-size:11px;fill:#8b93a1" }, gEl);
+        more.textContent = `+ ${b.c.methods.length - 6} more`;
+      }
+      gEl.onclick = () => { openCard(b.c.id); render(); };
+    }
+  }
+  svg.setAttribute("height", H);
+  stage.insertAdjacentHTML("beforeend", legend());
+  const up = document.getElementById("up");
+  if (up) up.onclick = () => { drill = null; render(); };
+}
+
+// ---------- Variant B: layer bands, every class at once ----------
+function VariantB() {
+  const gs = groups();
+  const ranks = [...new Set(gs.map(g => g.rank))].sort((a, b) => b - a);
+  stage.innerHTML = `<div class="bands" id="bands">
+    <p class="hint">Every class on one screen, in bands by level. The innermost level is at the bottom, so good arrows point down. Hover a class to trace it; click to open its card.</p>
+    ${ranks.map(r => {
+      const row = gs.filter(g => g.rank === r);
+      return `<div class="band"><h4>Level ${r}<em>${row.map(g => esc(g.id)).join(" · ")}</em></h4><div class="chips">
+        ${row.flatMap(g => g.classes).map(c => `<span class="chip ${selected === c.id ? "sel" : ""}" data-id="${esc(c.id)}" style="background:${colour(grade(c))}">${esc(c.id.replace(/::Component$/, ""))}<small>${esc(D.groupOf(c))}</small></span>`).join("")}
+      </div></div>`;
+    }).join("")}
+  </div>`;
+  const host = document.getElementById("bands");
+  const svg = svgEl("svg", { class: "overlay", width: host.scrollWidth, height: host.scrollHeight }, host);
+  markers(svg);
+  const pos = {};
+  const hr = host.getBoundingClientRect();
+  host.querySelectorAll(".chip").forEach(ch => {
+    const r = ch.getBoundingClientRect();
+    pos[ch.dataset.id] = { x: r.left - hr.left, y: r.top - hr.top, w: r.width, h: r.height };
+  });
+  const paths = [];
+  for (const e of edges) {
+    const a = pos[e.from], b = pos[e.to];
+    if (!a || !b) continue;
+    const bad = violating(e);
+    const cv = curve(a, b);
+    const p = svgEl("path", { d: cv.d, fill: "none", stroke: bad ? "#ff5a5a" : "#6b7383",
+      "stroke-width": bad ? 1.8 : 1, opacity: bad ? .9 : .18, "marker-end": `url(#m-${bad ? "bad" : "ok"})` }, svg);
+    paths.push({ e, p, bad });
+  }
+  const focus = id => {
+    const near = new Set([id]);
+    for (const { e, p, bad } of paths) {
+      const on = e.from === id || e.to === id;
+      if (on) { near.add(e.from); near.add(e.to); }
+      p.setAttribute("opacity", on ? 1 : bad ? .25 : .05);
+      p.setAttribute("stroke", bad ? "#ff5a5a" : on ? (e.from === id ? "#6aa9ff" : "#c18cff") : "#6b7383");
+      p.setAttribute("stroke-width", on ? 2 : 1);
+      p.setAttribute("marker-end", `url(#m-${bad ? "bad" : on ? (e.from === id ? "hot" : "inc") : "ok"})`);
+    }
+    host.querySelectorAll(".chip").forEach(ch => ch.classList.toggle("dim", !near.has(ch.dataset.id)));
+  };
+  const unfocus = () => {
+    for (const { p, bad } of paths) {
+      p.setAttribute("opacity", bad ? .9 : .18); p.setAttribute("stroke", bad ? "#ff5a5a" : "#6b7383");
+      p.setAttribute("stroke-width", bad ? 1.8 : 1); p.setAttribute("marker-end", `url(#m-${bad ? "bad" : "ok"})`);
+    }
+    host.querySelectorAll(".chip").forEach(ch => ch.classList.remove("dim"));
+    if (selected && pos[selected]) focus(selected);
+  };
+  host.querySelectorAll(".chip").forEach(ch => {
+    ch.onmouseenter = () => focus(ch.dataset.id);
+    ch.onmouseleave = unfocus;
+    ch.onclick = () => { openCard(ch.dataset.id); render(); };
+  });
+  stage.insertAdjacentHTML("beforeend", legend().replace("dependency (outer → inner)", "dependency · hover: <span style='color:var(--accent)'>uses</span> / <span style='color:var(--in)'>used by</span>"));
+  if (selected && pos[selected]) focus(selected);
+}
+
+// ---------- Variant C: dependency matrix ----------
+const expanded = new Set();
+let pickedCell = null;
+function VariantC() {
+  const gs = groups();
+  // rows and columns: groups (inner first), expanded groups list their classes
+  const items = [];
+  for (const g of gs) {
+    items.push({ type: "grp", id: g.id, members: g.classes.map(c => c.id), g });
+    if (expanded.has(g.id)) for (const c of g.classes) items.push({ type: "cls", id: c.id, members: [c.id], g });
+  }
+  const count = (r, c) => {
+    const rs = new Set(r.members), cs = new Set(c.members);
+    return edges.filter(e => rs.has(e.from) && cs.has(e.to) && e.from !== e.to);
+  };
+  const vis = items.filter(it => it.type === "cls" || !expanded.has(it.id));
+  const rowsHtml = items.map((r, ri) => {
+    const cells = vis.map(c => {
+      if (r === c || (r.type === "cls" && c.type === "grp" && c.id === r.g.id) || (r.type === "grp" && expanded.has(r.id) )) {
+        if (r === c) return `<td class="diag"></td>`;
+      }
+      if (r.type === "grp" && expanded.has(r.id)) return `<td style="background:#1a1d22"></td>`;
+      const es = count(r, c);
+      if (!es.length) return `<td></td>`;
+      const bad = es.some(violating);
+      const key = r.id + "|" + c.id;
+      return `<td class="${bad ? "v" : "n"} ${pickedCell === key ? "on" : ""}" data-r="${esc(r.id)}" data-c="${esc(c.id)}">${es.length}</td>`;
+    }).join("");
+    const label = r.type === "grp" ? `${expanded.has(r.id) ? "▾" : "▸"} ${esc(r.id)} <span style="color:#5d6574">L${r.g.rank}</span>` : esc(r.id.replace(/::Component$/, ""));
+    const sw = r.type === "cls" ? `<span style="color:${colour(grade(byId[r.id]))}">■</span> ` : "";
+    return `<tr><th class="rowh ${r.type}" data-item="${esc(r.id)}" data-type="${r.type}">${sw}${label}</th>${cells}</tr>`;
+  }).join("");
+  const head = vis.map(c => `<th class="colh ${c.type}"><div>${esc(c.id.replace(/::Component$/, ""))}</div></th>`).join("");
+  let pairs = "";
+  if (pickedCell) {
+    const [ri, ci] = pickedCell.split("|");
+    const r = items.find(i => i.id === ri), c = items.find(i => i.id === ci);
+    if (r && c) pairs = `<div class="pairs"><b>${esc(ri)} → ${esc(ci)}</b><br>${count(r, c).map(pairLine).join("<br>")}</div>`;
+  }
+  stage.innerHTML = `<div class="matrix">
+    <p class="hint">Row depends on column. Rows and columns run from the innermost level down. A number below the diagonal is fine (outer uses inner). A <span style="color:var(--red)">red number above it</span> breaks the dependency rule. Click a group to expand it to classes; click a number for the pairs; click a class for its card.</p>
+    <table class="dsm"><tr><th></th>${head}</tr>${rowsHtml}</table>${pairs}</div>`;
+  stage.querySelectorAll("th.rowh").forEach(th => th.onclick = () => {
+    if (th.dataset.type === "grp") { expanded.has(th.dataset.item) ? expanded.delete(th.dataset.item) : expanded.add(th.dataset.item); render(); }
+    else { openCard(th.dataset.item); }
+  });
+  stage.querySelectorAll("td[data-r]").forEach(td => td.onclick = () => { pickedCell = td.dataset.r + "|" + td.dataset.c; render(); });
+}
+
+// ---------- wiring ----------
+const VARIANTS = [
+  { key: "A", name: "Drill-down boxes", fn: VariantA },
+  { key: "B", name: "Layer bands", fn: VariantB },
+  { key: "C", name: "Dependency matrix", fn: VariantC },
+];
+const params = new URLSearchParams(location.search);
+let vi = Math.max(0, VARIANTS.findIndex(v => v.key === (params.get("variant") || "A")));
+const diagramSel = document.getElementById("diagram");
+diagramSel.innerHTML = Object.entries(DIAGRAMS).map(([k, d]) => `<option value="${k}">${d.label}</option>`).join("");
+diagramSel.value = DIAGRAMS[params.get("diagram")] ? params.get("diagram") : "real";
+const colourSel = document.getElementById("colour");
+colourSel.value = metric[params.get("colour")] ? params.get("colour") : "cc";
+
+function syncUrl() {
+  const p = new URLSearchParams({ variant: VARIANTS[vi].key, diagram: diagramSel.value, colour: colourSel.value });
+  if (drill && VARIANTS[vi].key === "A") p.set("drill", drill);
+  if (selected) p.set("select", selected);
+  history.replaceState(null, "", "?" + p);
+}
+function render() {
+  D = DIAGRAMS[diagramSel.value];
+  colourBy = colourSel.value;
+  document.getElementById("banner").classList.toggle("on", !!D.proposal);
+  document.getElementById("main").classList.toggle("with-banner", !!D.proposal);
+  document.getElementById("apptag").textContent = `${IR.app} · scanned ${IR.scanned_at.slice(0, 16).replace("T", " ")} UTC`;
+  document.getElementById("vlabel").textContent = `${VARIANTS[vi].key} (${VARIANTS[vi].name})`;
+  VARIANTS[vi].fn();
+  if (selected) { const s = card.querySelector("pre.src")?.scrollTop; openCard(selected); }
+  status();
+  syncUrl();
+}
+const cycle = d => { vi = (vi + d + VARIANTS.length) % VARIANTS.length; hideTip(); render(); };
+document.getElementById("prev").onclick = () => cycle(-1);
+document.getElementById("next").onclick = () => cycle(1);
+diagramSel.onchange = render;
+colourSel.onchange = render;
+document.getElementById("regen").onclick = () => {
+  document.getElementById("status").textContent = "In the gem: writes {op: regen} to .arch-viewer/to-agent.edn and wakes Claude. Here: nothing.";
+};
+addEventListener("keydown", ev => {
+  if (ev.target.closest("input, textarea, select, [contenteditable]")) return;
+  if (ev.key === "ArrowLeft") cycle(-1);
+  if (ev.key === "ArrowRight") cycle(1);
+  if (ev.key === "Escape" && drill) { drill = null; render(); }
+});
+addEventListener("resize", () => render());
+if (params.get("select") && byId[params.get("select")]) selected = params.get("select");
+render();
+</script>
+</body>
+</html>
